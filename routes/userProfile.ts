@@ -51,34 +51,40 @@ export function getUserProfile () {
 
     let username = user.username
 
-    if (username?.match(/#{(.*)}/) !== null && utils.isChallengeEnabled(challenges.usernameXssChallenge)) {
-      req.app.locals.abused_ssti_bug = true
-      const code = username?.substring(2, username.length - 1)
-      try {
-        if (!code) {
-          throw new Error('Username is null')
-        }
-        const singleQuoteRegex = /^'(?:[^'\\]|\\.)*'$/
-        const doubleQuoteRegex = /^"(?:[^"\\]|\\.)*"$/
-        const backtickRegex = /^`(?:[^`\\$]|\\.|\$(?!{))*`$/
-        const numericRegex = /^-?\d+(?:\.\d+)?$/
-        const booleanRegex = /^(?:true|false|null|undefined)$/
+    if (username) {
+      username = username.replace(/[\r\n]+/g, ' ')
+      const match = username.match(/^#{(.*)}$/)
+      if (match !== null && utils.isChallengeEnabled(challenges.usernameXssChallenge)) {
+        req.app.locals.abused_ssti_bug = true
+        const code = match[1]
+        try {
+          if (!code) {
+            throw new Error('Username is null')
+          }
+          const mathRegex = /^[\d\s+\-*/().%]+$/
+          const singleQuoteRegex = /^'(?:[^'\\]|\\.)*'$/
+          const doubleQuoteRegex = /^"(?:[^"\\]|\\.)*"$/
+          const numericRegex = /^-?\d+(?:\.\d+)?$/
+          const booleanRegex = /^(?:true|false|null|undefined)$/
 
-        const isSafe = singleQuoteRegex.test(code) ||
-          doubleQuoteRegex.test(code) ||
-          backtickRegex.test(code) ||
-          numericRegex.test(code) ||
-          booleanRegex.test(code)
+          const isSafe = mathRegex.test(code) ||
+            singleQuoteRegex.test(code) ||
+            doubleQuoteRegex.test(code) ||
+            numericRegex.test(code) ||
+            booleanRegex.test(code)
 
-        if (!isSafe) {
-          throw new Error('Unsafe code execution blocked')
+          if (!isSafe) {
+            throw new Error('Unsafe code execution blocked')
+          }
+          username = String(eval(code)) // eslint-disable-line no-eval
+        } catch (err) {
+          username = '\\' + username
         }
-        username = eval(code) // eslint-disable-line no-eval
-      } catch (err) {
+      } else {
         username = '\\' + username
       }
-    } else {
-      username = '\\' + username
+      username = username.replace(/([^\\]|^)([!#]\{)/g, '$1\\$2')
+      username = entities.encode(username)
     }
 
     const themeKey = config.get<string>('application.theme') as keyof typeof themes
@@ -100,7 +106,8 @@ export function getUserProfile () {
     try {
       const pug = (await import('pug')).default
       const fn = pug.compile(template)
-      const CSP = `img-src 'self' ${user?.profileImage}; script-src 'self' 'unsafe-eval'`
+      const safeProfileImage = (user?.profileImage && !/[;\s\r\n'"]/.test(user.profileImage)) ? user.profileImage : ''
+      const CSP = `img-src 'self'${safeProfileImage ? ` ${safeProfileImage}` : ''}; script-src 'self' 'unsafe-eval'`
 
       challengeUtils.solveIf(challenges.usernameXssChallenge, () => {
         return username && user?.profileImage.match(/;[ ]*script-src(.)*'unsafe-inline'/g) !== null && utils.contains(username, '<script>alert(`xss`)</script>')
