@@ -101,27 +101,42 @@ router.post('/', (req: Request<Record<string, unknown>, Record<string, unknown>,
       }
 
       if (req.body.layout) {
-        const filePath: string = path.resolve(req.body.layout).toLowerCase()
-        const isForbiddenFile: boolean = (filePath.includes('ftp') || filePath.includes('ctf.key') || filePath.includes('encryptionkeys'))
-        if (!isForbiddenFile) {
-          res.render('dataErasureResult', {
-            ...req.body,
-            ...themeVars
-          }, (error, html) => {
-            if (!html || error) {
-              next(new Error(error.message))
-            } else {
-              const sendlfrResponse: string = html.slice(0, 100) + '......'
-              res.send(sendlfrResponse)
-              challengeUtils.solveIf(challenges.lfrChallenge, () => { return true })
-            }
-          })
-        } else {
+        if (typeof req.body.layout !== 'string') {
           next(new Error('File access not allowed'))
+          return
         }
-      } else {
+        const layoutsDir = path.resolve('views/layouts')
+        const normalizedLayout = path.normalize(req.body.layout)
+        const resolvedPath = path.resolve(layoutsDir, normalizedLayout)
+        const filePath = resolvedPath.toLowerCase()
+        const isPathTraversal = !resolvedPath.startsWith(layoutsDir + path.sep) ||
+          normalizedLayout.startsWith('..') ||
+          path.isAbsolute(req.body.layout)
+        const isForbiddenFile = isPathTraversal ||
+          filePath.includes('ftp') ||
+          filePath.includes('ctf.key') ||
+          filePath.includes('encryptionkeys')
+
+        if (isForbiddenFile) {
+          next(new Error('File access not allowed'))
+          return
+        }
+
         res.render('dataErasureResult', {
           ...req.body,
+          ...themeVars
+        }, (error, html) => {
+          if (!html || error) {
+            next(new Error(error?.message ?? 'Render failed'))
+          } else {
+            res.send(html)
+            challengeUtils.solveIf(challenges.lfrChallenge, () => { return false })
+          }
+        })
+      } else {
+        const { layout: _, ...safeBody } = req.body
+        res.render('dataErasureResult', {
+          ...safeBody,
           ...themeVars
         })
       }
